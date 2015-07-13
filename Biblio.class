@@ -1,0 +1,452 @@
+<?php
+
+class Biblio {
+
+      public $biblio_conn;
+
+      public $keywords_dataset;
+      public $biblio_dataset;
+      public $authors_dataset;
+      public $attachments_dataset;
+
+
+
+
+      final public function __construct(){
+
+            $this->biblio_conn = mysql_connect(DATABASE_SERVER, DATABASE_USER, DATABASE_PWD);
+            if (!$this->biblio_conn) {
+                die('Could not connect to Biblio.');
+            }
+
+      }
+
+
+
+
+      public function getSingleData($nid){
+
+            #got a nid, easy.  populate recordsets.  Use the unified method ...even if it seems that getSingleData is pretty much useless.  It will return false if failed or true if successful
+            return $this->populateRecordsets($nid, null, 0);
+
+      }
+
+
+
+      #gets all records that apparaently have not been updated.  this will return true and will popupate the _dataset properties above or will return false if it fails.
+      public function getBatchData($last_updated = null){
+            if($last_updated == null){
+                  #nothing specified by user, so get time of last batch job.  I expect a unix timestamp here.  banking on it, in fact.
+                  $get_unprocessed_sql = "select max(processed) from ".DATABASE_NAME.".b2f_log where process_method = 'batch'";
+                  $tmp = mysql_query($get_unprocessed_sql, $this->biblio_conn);
+                  $unprocessed_result = mysql_fetch_array($tmp);
+                  $last_updated = $unprocessed_result[0];
+                  if($last_updated == null)
+                        $last_updated = 0;
+            }
+
+            #if we got a nonnumeric in here, then it might be a date.  Let's see!
+            else if (!is_numeric($last_updated)){
+                  #did they pass in a date/time value?  Convert to UNIX Timestamp if possible.
+                  $last_updated = strtotime($last_updated);
+                  #if failed, return false.
+                  if(!is_numeric($last_updated))
+                        return false;
+
+            }
+
+            #sweet, a number!  Could this be a unix timestamp?  We'll pretend it is...what could possibly go wrong?
+            else if (is_numeric($last_updated)){
+                   $last_updated = $last_updated;
+            }
+
+            else { #crap0la, something weird got passed in there.  fail!
+                  return false;
+            }
+
+            #use unified method, which will return false if failed or true if successful
+            return $this->populateRecordsets(null, $last_updated, 0);
+
+      }
+
+
+
+
+      #we want all Biblio rows that are NOT in Fedora Commons.  identified by nothing in the field within Biblio that the constant BIBLIO_PID_FIELD maps to (defined in constants.inc)
+      public function getUnprocessedData(){
+
+            $this->populateRecordsets(null, null, 1);
+
+      }
+
+
+
+      #ok, so what is this here for?  So that we can handle return values in a unified way for both getBatchData and getSingleData mehtods.  Reduces duplicated code, even if it adds some more abstraction.
+      public function populateRecordsets($nid, $last_updated, $unprocessed){
+
+            $keywords_dataset_status = $this->getBiblio($nid, $last_updated, $unprocessed);
+
+            $biblio_dataset_status = $this->getBiblioAtts($nid, $last_updated, $unprocessed);
+
+            $authors_dataset_status = $this->getBiblioAuthors($nid, $last_updated, $unprocessed);
+
+            $attachments_dataset_status = $this->getKeywords($nid, $last_updated, $unprocessed);
+
+            #if any of these methods erred out, they return false.  Then we need to return false from here too.  It won't work!
+            if(!$keywords_dataset_status || !$biblio_dataset_status || !$authors_dataset_status || !$attachments_dataset_status){
+                  return false;
+            } else {
+                  return true;
+            }
+      }
+
+
+
+
+      public function getBiblio($nid = null, $last_updated = null, $unprocessed = 0){
+
+            if(is_numeric($last_updated)){
+
+                  $sql = sprintf("
+                        select n.nid, n.title,
+                              b.biblio_publisher, b.biblio_custom1, b.biblio_secondary_title, b.biblio_year, b.biblio_volume, b.biblio_pages, b.biblio_lang,
+                              b.biblio_tertiary_title, b.biblio_citekey, b.biblio_number, b.biblio_notes, b.biblio_date, b.biblio_type_of_work, b.biblio_edition,
+                              b.biblio_section, b.biblio_place_published, b.biblio_abst_e, b.biblio_isbn, b.biblio_url,
+                              bt.name as biblio_type_name
+                        from ".DATABASE_NAME.".node n
+                              inner join ".DATABASE_NAME.".biblio b on n.nid = b.nid
+                              inner join ".DATABASE_NAME.".biblio_types bt on b.biblio_type = bt.tid
+                        where n.changed >= %d",
+                        $last_updated);
+
+            } else if (is_numeric($nid)) {
+
+                  #stick nid in here so that we can have consistent results.
+                  $sql = sprintf("
+                        select ".$nid." as nid, n.title,
+                              b.biblio_publisher, b.biblio_custom1, b.biblio_secondary_title, b.biblio_year, b.biblio_volume, b.biblio_pages, b.biblio_lang,
+                              b.biblio_tertiary_title, b.biblio_citekey, b.biblio_number, b.biblio_notes, b.biblio_date, b.biblio_type_of_work, b.biblio_edition,
+                              b.biblio_section, b.biblio_place_published, b.biblio_abst_e, b.biblio_isbn, b.biblio_url,
+                              bt.name as biblio_type_name
+                        from ".DATABASE_NAME.".node n
+                              inner join ".DATABASE_NAME.".biblio b on n.nid = b.nid
+                              inner join ".DATABASE_NAME.".biblio_types bt on b.biblio_type = bt.tid
+                        where n.nid = %d",
+                        $nid);
+
+            } else if ($unprocessed == 1) {
+   
+                  $sql = sprintf("
+                        select n.nid, n.title,
+                              b.biblio_publisher, b.biblio_custom1, b.biblio_secondary_title, b.biblio_year, b.biblio_volume, b.biblio_pages, b.biblio_lang,
+                              b.biblio_tertiary_title, b.biblio_citekey, b.biblio_number, b.biblio_notes, b.biblio_date, b.biblio_type_of_work, b.biblio_edition,
+                              b.biblio_section, b.biblio_place_published, b.biblio_abst_e, b.biblio_isbn, b.biblio_url,
+                              bt.name as biblio_type_name
+                        from ".DATABASE_NAME.".node n
+                              inner join ".DATABASE_NAME.".biblio b on n.nid = b.nid
+                              inner join ".DATABASE_NAME.".biblio_types bt on b.biblio_type = bt.tid
+                        where b.biblio_custom1 is null");
+
+            } else {
+                  return false;
+            }
+
+            $results = mysql_query($sql,$this->biblio_conn);
+
+            if(!$results){
+                  return false;
+            } else {
+                  $this->biblio_dataset = $results;
+                  return true;
+            }
+
+      }
+
+
+
+
+      public function getBiblioAtts($nid = null, $last_updated = null, $unprocessed = 0){
+
+            if(is_numeric($last_updated)){
+
+                  $sql = sprintf("
+                        select n.nid,
+                              f.filename, f.filemime, f.fid, max(u.vid) as version_id
+                        from ".DATABASE_NAME.".files f
+                              inner join ".DATABASE_NAME.".upload u on f.fid = u.fid
+                              inner join ".DATABASE_NAME.".node n on u.nid = n.nid
+                        where n.changed >= %d
+                        group by n.nid,
+                              f.filename, f.filemime, f.fid",
+                        $last_updated);
+
+            } else if (is_numeric($nid)) {
+
+                  #stick nid in here so that we can have consistent results.
+                  $sql = sprintf("
+                        select ".$nid." as nid, f.filename, f.filemime, f.fid, max(u.vid) as version_id
+                        from ".DATABASE_NAME.".files f
+                              inner join ".DATABASE_NAME.".upload u on f.fid = u.fid
+                        where u.nid = %d
+                        group by nid, f.filename, f.filemime, f.fid",
+                        $nid);
+
+
+            } else if ($unprocessed == 1) {
+
+                  $sql = sprintf("
+                        select u.nid,
+                              f.filename, f.filemime, f.fid, max(u.vid) as version_id
+                        from ".DATABASE_NAME.".files f
+                              inner join ".DATABASE_NAME.".upload u on f.fid = u.fid
+                              inner join ".DATABASE_NAME.".biblio b on u.nid = b.nid
+                        where b.biblio_custom1 is null
+                        group by u.nid,
+                              f.filename, f.filemime, f.fid");
+   
+   
+            } else {
+                  return false;
+            }
+
+            $results = mysql_query($sql,$this->biblio_conn);
+
+            if(!$results){
+                  return false;
+            } else {
+                  $this->attachments_dataset = $results;
+                  return true;
+            }
+
+      }
+
+
+
+
+      public function getBiblioAuthors($nid = null, $last_updated = null, $unprocessed = 0){
+
+            if(is_numeric($last_updated)){
+
+                  $sql = sprintf("
+                        select n.nid,
+                              bcd.name,
+                              bc.auth_type,
+                              max(bc.vid) as version_id
+                        from ".DATABASE_NAME.".biblio_contributor bc
+                              inner join ".DATABASE_NAME.".biblio_contributor_data bcd on bc.cid = bcd.cid
+                              inner join ".DATABASE_NAME.".node n on bc.nid = n.nid
+                        where n.changed >= %d
+                              and bc.auth_type in (1,2,10,14)
+                        group by n.nid, bcd.name, bc.auth_type
+                    ",
+                    $last_updated);
+
+            } else if (is_numeric($nid)) {
+
+                  #stick nid in here so that we can have consistent results.
+                  $sql = sprintf("
+                        select ".$nid." as nid, bcd.name, bc.auth_type, max(bc.vid) as version_id
+                        from ".DATABASE_NAME.".biblio_contributor bc
+                              inner join ".DATABASE_NAME.".biblio_contributor_data bcd on bc.cid = bcd.cid
+                        where bc.nid = %d
+                              and bc.auth_type in (1,2,10,14)
+                        group by nid, bcd.name, bc.auth_type
+                    ",
+                    $nid);
+
+            } else if ($unprocessed == 1) {
+
+                  $sql = sprintf("
+                        select bc.nid,
+                              bcd.name,
+                              bc.auth_type,
+                              max(bc.vid) as version_id
+                        from ".DATABASE_NAME.".biblio_contributor bc
+                              inner join ".DATABASE_NAME.".biblio_contributor_data bcd on bc.cid = bcd.cid
+                              inner join ".DATABASE_NAME.".biblio b on bc.nid = b.nid
+                        where b.biblio_custom1 is null
+                              and bc.auth_type in (1,2,10,14)
+                        group by bc.nid, bcd.name, bc.auth_type
+                    ");
+
+            } else {
+                  return false;
+            }
+
+            $results = mysql_query($sql,$this->biblio_conn);
+
+            if(!$results){
+                  return false;
+            } else {
+                  $this->authors_dataset = $results;
+                  return true;
+            }
+
+      }
+
+
+
+
+      public function getKeywords($nid = null, $last_updated = null, $unprocessed = 0){
+
+            if(is_numeric($last_updated)){
+
+                  #ugh, I hate nested ifs
+                  if(USING_TAXONOMY==1){
+
+                        $sql = sprintf("
+                                    select n.nid, bkd.word, max(bk.vid) as version_id
+                                    from ".DATABASE_NAME.".biblio_keyword bk
+                                          inner join ".DATABASE_NAME.".biblio_keyword_data bkd on bk.kid = bkd.kid
+                                          inner join ".DATABASE_NAME.".node n on bk.nid = n.nid
+                                    where n.changed >= %d
+                                    group by n.nid, bkd.word
+                              union all
+                                    select tn.nid, td.name as word, max(tn.vid) as version_id
+                                    from ".DATABASE_NAME.".term_node tn
+                                          inner join ".DATABASE_NAME.".term_data td on tn.tid = td.tid
+                                          inner join ".DATABASE_NAME.".node n on tn.nid = n.nid
+                                    where n.changed >= %d
+                                    group by tn.nid, td.name
+                        ",
+                        $last_updated, $last_updated);
+
+                  } else {
+
+                        $sql = sprintf("
+                              select n.nid, bkd.word, max(bk.vid) as version_id
+                              from ".DATABASE_NAME.".biblio_keyword bk
+                                    inner join ".DATABASE_NAME.".biblio_keyword_data bkd on bk.kid = bkd.kid
+                                    inner join ".DATABASE_NAME.".node n on bk.nid = n.nid
+                              where n.changed >= %d
+                              group by n.nid, bkd.word
+
+                        ",
+                        $last_updated);
+
+                  }
+
+            } else if (is_numeric($nid)) {
+
+                  #ugh, I hate nested ifs
+                  if(USING_TAXONOMY==1){
+
+                        #stick nid in here so that we can have consistent results.
+                        $sql = sprintf("
+                              select ".$nid." as nid, bkd.word, max(bk.vid) as version_id
+                              from ".DATABASE_NAME.".biblio_keyword bk
+                                    inner join ".DATABASE_NAME.".biblio_keyword_data bkd on bk.kid = bkd.kid
+                              where bk.nid = %d
+                              group by nid, bkd.word
+
+                        union all
+                              select ".$nid." as nid, td.name as word, max(tn.vid) as version_id
+                              from ".DATABASE_NAME.".term_node tn
+                                    inner join ".DATABASE_NAME.".term_data td on tn.tid = td.tid
+                              where tn.nid = %d
+                              group by nid, td.name
+                        ",
+                        $nid, $nid);
+
+                  } else {
+
+                        #stick nid in here so that we can have consistent results.
+                        $sql = sprintf("
+                              select ".$nid." as nid, bkd.word, max(bk.vid) as version_id
+                              from ".DATABASE_NAME.".biblio_keyword bk
+                                    inner join ".DATABASE_NAME.".biblio_keyword_data bkd on bk.kid = bkd.kid
+                              where bk.nid = %d
+                              group by nid, bkd.word
+                        ",
+                        $nid);
+
+                  }
+
+            } else if (is_numeric($nid)) {
+
+                  #ugh, I hate nested ifs
+                  if(USING_TAXONOMY==1){
+
+                        $sql = sprintf("
+                                    select bk.nid, bkd.word, max(bk.vid) as version_id
+                                    from ".DATABASE_NAME.".biblio_keyword bk
+                                          inner join ".DATABASE_NAME.".biblio_keyword_data bkd on bk.kid = bkd.kid
+                                          inner join ".DATABASE_NAME.".biblio b on bk.nid = b.nid
+                                    where b.biblio_custom1 is null
+                                    group by bk.nid, bkd.word
+                              union all
+                                    select tn.nid, td.name as word, max(tn.vid) as version_id
+                                    from ".DATABASE_NAME.".term_node tn
+                                          inner join ".DATABASE_NAME.".term_data td on tn.tid = td.tid
+                                          inner join ".DATABASE_NAME.".biblio b on tn.nid = b.nid
+                                    where b.biblio_custom1 is null
+                                    group by tn.nid, td.name
+                        ");
+
+                  } else {
+
+                        $sql = sprintf("
+                              select bk.nid, bkd.word, max(bk.vid) as version_id
+                              from ".DATABASE_NAME.".biblio_keyword bk
+                                    inner join ".DATABASE_NAME.".biblio_keyword_data bkd on bk.kid = bkd.kid
+                                    inner join ".DATABASE_NAME.".biblio b on bk.nid = b.nid
+                              where b.biblio_custom1 is null
+                              group by bk.nid, bkd.word
+
+                        ");
+
+                  }
+
+
+            } else {
+                  return false;
+            }
+
+            $results = mysql_query($sql,$this->biblio_conn);
+
+            if(!$results){
+                  return false;
+            } else {
+                  $this->keywords_dataset = $results;
+                  return true;
+            }
+
+      }
+
+
+
+
+      public function updateBiblio($nid, $pid){
+
+            #update Biblio record with PID using the NID.  This helps us update the right tuple within Drupal.  Then we'll put on the lid.  What?  You already did?
+            $sql = sprintf("
+                  update ".DATABASE_NAME.".biblio
+                  set biblio_custom1 = '%s'
+                  where nid = %d
+            ", $pid, $nid);
+
+            $result = mysql_query($sql, $this->biblio_conn);
+
+      }
+
+
+
+
+      public function appendLog($successful, $failed, $failures, $process_method, $fedora_errors){
+            $msg = $successful.' records successfully processed.  '.$failed.' failures.  ';
+
+            $sql = sprintf("
+                  insert into ".DATABASE_NAME.".b2f_log (log_message, processed, process_method, failures, fedora_errors)
+                  values ('%s', %d, '%s', '%s', '%s')",
+                  $msg, time(), $process_method, $failures, $fedora_errors );
+
+
+            $result = mysql_query($sql, $this->biblio_conn);
+
+      }
+
+
+
+}
+
+?>
