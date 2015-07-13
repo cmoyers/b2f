@@ -1,0 +1,169 @@
+<?php
+
+class Bibtex {
+
+      public $name = '';
+      public $http_path = '';
+      public $fs_path = '';
+
+
+      public function __construct($biblio_row, $authors, $editors, $keywords){
+
+            $this->createBibtexFile($biblio_row, $authors, $editors, $keywords);
+
+      }
+
+
+
+
+      #create bibtext string
+      public function createBibtexFile($biblio_row, $authors, $editors, $keywords) {
+
+            #figure out which type of entry we are dealing with here...
+            $bibtex = '';
+            $type = "article";
+            $journal = $series = $booktitle = $school = $organization = $institution = null;
+            switch ($biblio_row["biblio_type"]) {
+                  case 102 :
+                        $type = "article";
+                        $journal = $biblio_row["biblio_secondary_title"];
+                        break;
+                  case 100 :
+                        $type = "book";
+                        $series = $biblio_row["biblio_secondary_title"];
+                  break;
+                  case 101 :
+                        $type = "inbook";
+                        $booktitle = $biblio_row["biblio_secondary_title"];
+                        break;
+                  case 100 :
+                        $type = "incollection";
+                        break;
+                  case 103 :
+                        $type = "inproceedings";
+                        $booktitle = $biblio_row["biblio_secondary_title"];
+                        $organization = $biblio_row["biblio_publisher"];
+                        $series = $biblio_row["biblio_tertiary_title"];
+                        break;
+                  case 129 :
+                        $type = "misc";
+                        break;
+                  case 108 :
+                        $type = "phdthesis";
+                        $school = $biblio_row["biblio_publisher"];
+                        $biblio_row["biblio_publisher"] = null;
+                        break;
+                  case 104 :
+                        $type = "proceedings";
+                        break;
+                  case 109 :
+                        $type = "techreport";
+                        $institution  = $biblio_row["biblio_publisher"];
+                        $biblio_row["biblio_publisher"] = null;
+                        break;
+                  case 124 :
+                        $type = "unpublished";
+                        break;
+            }
+
+            #begin writing bibtex record now
+            $bibtex .= '@'. $type .' { ';
+            $bibtex .= ($biblio_row["biblio_citekey"]) ? $biblio_row["biblio_citekey"] .",\n" : ",\n";
+
+            if (!empty($biblio_row["title"])) {
+                  $bibtex .= "\ttitle = {". $biblio_row["title"] ."},\n";
+            }
+            if (!empty($journal)) {
+                  $bibtex .= "\tjournal = {". $journal ."},\n";
+            }
+            if (!empty($booktitle)) {
+                  $bibtex .= "\tbooktitle = {". $booktitle ."},\n";
+            }
+            if (!empty($series)) {
+                  $bibtex .= "\tseries = {". $series ."},\n";
+            }
+            if (!empty($biblio_row["biblio_volume"])) {
+                  $bibtex .= "\tvolume = {". $biblio_row["biblio_volume"] ."},\n";
+            }
+            if (!empty($biblio_row["biblio_number"])) {
+                  $bibtex .= "\tnumber = {". $biblio_row["biblio_number"] ."},\n";
+            }
+            if (!empty($biblio_row["biblio_year"])) {
+                  $bibtex .= "\tyear = {". $biblio_row["biblio_year"] ."},\n";
+            }
+            if (!empty($biblio_row["biblio_notes"])) {
+                  $bibtex .= "\tnote = {". $biblio_row["biblio_notes"] ."},\n";
+            }
+            if (!empty($biblio_row["biblio_date"])) {
+                  $bibtex .= "\tmonth = {". $biblio_row["biblio_date"] ."},\n";
+            }
+            if (!empty($biblio_row["biblio_pages"])) {
+                  $bibtex .= "\tpages = {". $biblio_row["biblio_pages"] ."},\n";
+            }
+            if (!empty($biblio_row["biblio_publisher"])) {
+                  $bibtex .= "\tpublisher = {". $biblio_row["biblio_publisher"] ."},\n";
+            }
+            if (!empty($school)) {
+                  $bibtex .= "\tschool = {". $school ."},\n";
+            }
+            if (!empty($organization)) {
+                  $bibtex .= "\torganization = {". $organization ."},\n";
+            }
+            if (!empty($institution)) {
+                  $bibtex .= "\tinstitution = {". $institution ."},\n";
+            }
+            if (!empty($biblio_row["biblio_type_of_work"])) {
+                  $bibtex .= "\ttype = {". $biblio_row["biblio_type_of_work"] ."},\n";
+            }
+            if (!empty($biblio_row["biblio_edition"])) {
+                  $bibtex .= "\tedition = {". $biblio_row["biblio_edition"] ."},\n";
+            }
+            if (!empty($biblio_row["biblio_section"])) {
+                  $bibtex .= "\tchapter = {". $biblio_row["biblio_section"] ."},\n";
+            }
+            if (!empty($biblio_row["biblio_place_published"])) {
+                  $bibtex .= "\taddress = {". $biblio_row["biblio_place_published"] ."},\n";
+            }
+            if (!empty($biblio_row["biblio_abst_e"])) {
+                  $bibtex .= "\tabstract = {". $biblio_row["biblio_abst_e"] ."},\n";
+            }
+            if (!empty($keywords)) {
+                  $bibtex .= "\tkeywords = {". $keywords ."},\n";
+            }
+            if (!empty($biblio_row["biblio_isbn"])) {
+                  $bibtex .= "\tISBN = {". $biblio_row["biblio_isbn"] ."},\n";
+            }
+            if (!empty($biblio_row["biblio_url"])) {
+                  $bibtex .= "\tURL = {". $biblio_row["biblio_url"] ."},\n";
+            }
+            if (!empty($authors)) {
+                  $bibtex .= "\tauthor = {". $authors ."},\n";
+            }
+            if (!empty($editors)) {
+                  $bibtex .= "\teditor = {". $editors ."},\n";
+            }
+
+            $bibtex .= "}\n\n";
+
+            return $this->writeFileToFS($biblio_row["nid"], $bibtex);
+      }
+
+
+
+
+      #create bibtext file, return the http path to the file (using the constant FILE_HTTP_PATH)
+      public function writeFileToFS($nid, $bibtex){
+
+            $file_name = "bibtex_" . $nid . ".txt";
+            $fhandle = fopen(FILE_PATH . $file_name, 'w');
+            fwrite($fhandle, $bibtex);
+            fclose($fhandle);
+
+            $this->name = $file_name;
+            $this->fs_path = FILE_PATH . $file_name;
+            $this->http_path = FILE_HTTP_PATH . $file_name;
+      }
+
+}
+
+?>
