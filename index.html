@@ -1,0 +1,75 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+
+	<title>Biblio to Fedora</title>
+      <script type="text/javascript" src="mootools-1.2.1-core-yc.js"></script>
+      <style type="text/css">
+            body {font-size:0.85em;font-family:verdana, sans-serif;}
+            fieldset {border:none;}
+      </style>
+
+</head>
+<body>
+
+
+
+      <h1>Run the Biblio to Fedora process</h1>
+      <h3 style="margin-bottom:20px;">You can do it one of four ways...</h3>
+
+      <div style="margin-left:25px;">
+
+
+
+
+            <strong>...By a specific NID</strong>
+            <form action="execute.php" method="post">
+            <fieldset style="margin-bottom:20px;">
+                  <label for="nid">Enter a Biblio NID</label> 
+                  <input type="text" name="nid" id="nid" />
+                  <input type="submit" value="Execute" />
+            </fieldset>
+            </form>
+
+            <strong>...For all Citations that are NOT yet in Fedora</strong>
+            <form action="execute.php" method="post">
+            <fieldset style="margin-bottom:20px;">
+                  <input type="hidden" name="non_existent" value="1" />
+                  <input type="submit" value="Execute" />
+            </fieldset>
+            </form>
+
+            <strong>...For all Citations updated after the last time a batch push to Fedora was logged</strong>
+            <form action="execute.php" method="post">
+            <fieldset style="margin-bottom:20px;">
+                  <input type="hidden" name="timestamp" />
+                  <input type="submit" value="Execute" />
+            </fieldset>
+            </form>
+
+            <strong>...For all Citations updated after a certain date</strong>
+            <form action="execute.php" method="post">
+            <fieldset style="margin-bottom:20px;">
+                  <label for="timestamp">Enter a UNIX Timestamp</label> 
+                  <input type="text" id="timestamp" name="timestamp" />
+                  <input type="submit" value="Execute" />
+            </fieldset>
+            </form>
+
+
+      </div>
+
+      <p>
+            Check out the <a href="log.php">log</a>.
+      </p>
+
+      <p style="width:800px;">
+            If you'd like to schedule this via cron, you can simply submit an <strong>http post</strong> request to
+            execute.php (via wget or curl for example.)  Specify nid=%insert nid here% to make the update for a single
+            record, last_updated=%insert unix timestamp here% to process all records in Biblio updated after the timestamp,
+            or last_updated= (effectively setting last updated to null) to process all since the last process was logged (this
+            should be an incremental update, and would be most commonly used.)  To run this for all records that are not yet
+            in Fedora, specify non_existent=1.  Don't try and combine parameters, I have no idea what will happen!
+      </p>
+
+</body></html>
