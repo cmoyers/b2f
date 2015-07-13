@@ -1,0 +1,495 @@
+<?php
+
+class Fedora {
+
+      public $soap_client_FCA;
+      public $soap_client_FCM;
+
+      public $biblio_record;
+      public $biblio_attachments;
+      public $biblio_author_string;
+      public $biblio_keyword_string;
+      public $bibtex;
+
+      public $PID;
+      public $label;
+
+      public $errors='';
+
+
+
+      final public function __construct($bib_row, $attachments, $author_string, $keyword_string, $bibtex){
+
+            #set up the connections to Fedora.  Use A for lite stuff (like checking for an object), M for more heavy lifting (like ingesting, pruging, etc)
+            $this->soap_client_FCA = new SoapClient(FEDORA_SERVER_API_A, array('login' => FEDORA_UID, 'password' => FEDORA_PWD));
+            if(!$this->soap_client_FCA){
+                die('Could not connect to Fedora API-A.  ');
+            }
+            $this->soap_client_FCM = new SoapClient(FEDORA_SERVER_API_M, array('login' => FEDORA_UID, 'password' => FEDORA_PWD));
+            if(!$this->soap_client_FCM){
+                die('Could not connect to Fedora API-M.  ');
+            }
+
+            $this->biblio_record = $bib_row;
+            $this->biblio_attachments = $attachments;
+            $this->biblio_author_string = $author_string;
+            $this->biblio_keyword_string = $keyword_string;
+            $this->bibtex = $bibtex;
+
+      }
+
+
+
+
+      #this is the method that will generally get called by external methods.  This figures out which action to take and starts the process.  Return true if successful,
+      #     false if failed
+      public function updateFedora(){
+
+            #ingest or update?
+            if($this->biblio_record[BIBLIO_PID_FIELD]==null){
+                  $this->PID = FEDORA_NAMESPACE.':'.$this->biblio_record["nid"];
+            } else {
+                  $this->PID=$this->biblio_record[BIBLIO_PID_FIELD];
+            }
+
+            # need to create a descriptive label for this object.  We'll use the title and perhaps the journal title (if it exsists).
+            $this->label = $this->biblio_record["title"];
+            if ($this->biblio_record["biblio_secondary_title"] != '') {
+                  $this->label = $this->biblio_record["biblio_secondary_title"] . ' - ' . $this->biblio_record["title"];
+            }
+
+            if($this->TestForPID()){
+                  if( $this->updateObject()) {
+                        return $this->updateDatastreamsForPID();
+                  } else {
+                        return false;
+                  }
+            } else {
+                  $xml = $this->buildDCXML();
+                  if( $this->ingestObject($xml) ) {
+                        return $this->addDatastreamsForPID();
+                  } else {
+                        return false;
+                  }
+            }
+
+      }
+
+
+
+
+      #test whether a PID exists within Fedora Commons
+      public function testForPID(){
+
+            #do soap call to get the item.
+            $params_FC = array("pid" => $this->PID);
+            try{
+                  $test_for_pid = $this->soap_client_FCA->__soapCall('getObjectProfile', array($params_FC));
+                  $result = $test_for_pid->objectProfile->pid;
+            } catch (Exception $e) {
+                  return false;
+            }
+
+
+            if ($result) {
+                  return true;
+            }
+            else {
+                  return false;
+            }
+
+      }
+
+
+
+
+      #build XML for a datastream.  In practice, this is Dublin Core
+      private function buildDCXML(){
+
+            $the_ingest_XML = '<oai_dc:dc xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:oai_dc="http://www.openarchives.org/OAI/2.0/oai_dc/">
+                        <dc:title>'.utf8_encode(str_replace('"','\'',htmlspecialchars($this->label))).'</dc:title>
+                        <dc:creator>'.utf8_encode(htmlspecialchars($this->biblio_author_string)).'</dc:creator>
+                        <dc:subject>'.utf8_encode(htmlspecialchars($this->biblio_keyword_string)).'</dc:subject>
+                        <dc:publisher>'.utf8_encode(htmlspecialchars($this->biblio_record["biblio_publisher"])).'</dc:publisher>
+                        <dc:date>'.utf8_encode(htmlspecialchars($this->biblio_record["biblio_year"])).'</dc:date>
+                        <dc:type>'.utf8_encode(htmlspecialchars($this->biblio_record["biblio_type_name"])).'</dc:type>
+                        <dc:language>'.utf8_encode(htmlspecialchars($this->biblio_record["biblio_lang"])).'</dc:language>
+                        <dc:description>Volume: '.utf8_encode(htmlspecialchars($this->biblio_record["biblio_volume"])).'; Pages: '
+                        .utf8_encode(htmlspecialchars($this->biblio_record["biblio_pages"])).'</dc:description>
+                  </oai_dc:dc>';
+
+            return  $the_ingest_XML;
+
+      }
+
+
+
+
+      #create object in Fedora Commons.  Also call the method to add datastreams
+      private function ingestObject($xml) {
+
+            #write the head of the FOXML doc
+            $the_ingest_XML = '<?xml version="1.0" encoding="UTF-8"?>
+                  <foxml:digitalObject PID="'.$this->PID.'" VERSION="1.1" xmlns:foxml="info:fedora/fedora-system:def/foxml#" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="info:fedora/fedora-system:def/foxml# http://www.fedora.info/definitions/1/0/foxml1-1.xsd">
+                  <foxml:objectProperties>
+                        <foxml:property NAME="info:fedora/fedora-system:def/model#state" VALUE="A"/>
+                        <foxml:property NAME="info:fedora/fedora-system:def/model#label" VALUE="Biblio Citation"/>
+                        <foxml:property NAME="info:fedora/fedora-system:def/model#ownerId" VALUE="fedoraAdmin"/>
+                  </foxml:objectProperties>';
+
+            $the_ingest_XML .= '<foxml:datastream CONTROL_GROUP="X" ID="dc_'.$this->biblio_record["nid"].'" STATE="A" VERSIONABLE="true">
+                        <foxml:datastreamVersion ID="dc_'.$this->biblio_record["nid"].'.0" LABEL="Dublin Core" MIMETYPE="text/xml">
+                              <foxml:contentDigest TYPE="DISABLED"/>
+                              <foxml:xmlContent>
+                                    '.$xml.'
+                              </foxml:xmlContent>
+                        </foxml:datastreamVersion>
+                  </foxml:datastream>';
+
+            $the_ingest_XML .= '</foxml:digitalObject>';
+
+            #perform ingest
+            $params = array(
+                        'objectXML' => $the_ingest_XML,
+                        'format' => 'info:fedora/fedora-system:FOXML-1.1',
+                        'logMessage' => 'b2f'
+                  );
+
+            try {
+                  $send = $this->soap_client_FCM->__soapCall('ingest', array($params));
+            } catch (Exception $e) {
+                  $this->errors.='Error while ingesting '.$this->PID.'.  ';
+            }
+
+
+            if($send)
+                  return true;
+            else
+                  return false;
+
+      }
+
+
+
+
+      #add datastreams for an object.  This is called by the add object method.
+      private function addDatastreamsForPID(){
+
+            #add attachments
+            if($this->biblio_attachments) {
+                  while ($row = mysql_fetch_assoc($this->biblio_attachments)){
+                        $this->addExtDatastream('att_'.$row["nid"].'_'.$row["fid"], $row["filemime"], FILE_HTTP_PATH.$row["filename"]);
+                  }
+            }
+
+            #add bibtex
+            $this->addExtDatastream($this->bibtex->name, 'text/plain', $this->bibtex->http_path);
+
+            return true;
+      }
+
+
+
+
+      #update object in Fedora Commons.  Also call the method to modify datastreams
+      private function updateObject() {
+
+            #update object
+            $params = array(
+                        'pid' => $this->PID,
+                        'state' => 'A',
+                        'ownerId' => FEDORA_UID,
+                        'logMessage' => 'b2f',
+                        'label' => 'Biblio Citation'
+                  );
+
+            try{
+                  $send = $this->soap_client_FCM->__soapCall('modifyObject', array($params));
+            } catch (Exception $e) {
+                  $this->errors.='Error while updating '.$this->PID.'.  ';
+            }
+
+            if($send)
+                  return true;
+            else
+                  return false;
+
+      }
+
+
+
+
+      #Find all attachments for this object, and add/update them.  Then if there are any left (ones that were added before
+      private function updateDatastreamsForPID(){
+
+            $ds_array = $this->getDatastreamsByPID($this->PID);
+
+            if($this->biblio_attachments){
+                  foreach ($this->biblio_attachments as $row) { #outer loop, loop over attachments in Biblio
+
+                        $dsID=0; #we'll use this to store a DS id for each datastream we find.
+
+                        for($i=0;$i<count($ds_array);$i++){ #inner loop, loop over datastreams
+                              if($ds_array[$i]=='att_'.$row["nid"].'_'.$row["fid"]) { #found a stnadard (non DC or Bibtex) datastream
+                                   $dsID = $ds_array[$i];
+                                   break;
+                              }
+                        }
+
+                        if($dsID===0){ #not found in list of datastreams but is an attachment in Biblio
+                              $this->addExtDatastream('att_'.$row["fid"].'_'.$row["fid"], $row["filemime"], FILE_HTTP_PATH.$row["filename"]);
+                        }
+
+                        else {#is an attachment to biblio and found in FC
+                              $this->updateExtDatastream($dsID, $row["filemime"], FILE_HTTP_PATH.$row["filename"]);
+                              $ds_array[$i]=null; #remove this element from the FC array now that we've processed it.
+                        }
+
+                        #re-init the dsID so we can do the inner loop over again properly
+                        $dsID = 0;
+                  }
+
+            }
+
+            #check for standard datastreams (bibtex, DC).  If they are found, update them and set vars below to true.  If these are false, we'll need to add the datastreams.
+            $has_dsBib = false;
+            $has_dsSDC = false;
+
+            for($i=0;$i<count($ds_array);$i++){ #loop over datastreams again.  This array should be smaller at this point, since we removed some elements.
+
+                  if ($ds_array[$i]==null) {
+                        #do nothing, on purpose.
+                  }
+
+                  else if($ds_array[$i]=='dc_'.$nid){ #found a DC datastream
+                        $this->updateDCDatastream();
+                        $has_dsDC = true;
+                        $ds_array[$i]=null; #remove this element from the array now that we've processed it.
+                  }
+
+                  else if($ds_array[$i]==$this->bibtex->name){ #found a Bibtex datastream
+                        $this->updateExtDatastream($this->bibtex->name, 'text/plain', $this->bibtex->http_path);
+                        $has_dsBib = true;
+                        $ds_array[$i]=null; #remove this element from the array now that we've processed it.
+                  }
+
+                  else if($ds_array[$i]=='DC'){ #found the base DC datastream...wondering if this is necessary?  doesn't seem to work.  Oh well, I'll leave it for now.
+                        #$this->updateDCDatastream('DC');
+                        $ds_array[$i]=null; #remove this element from the array now that we've processed it.
+                  }
+
+                  else{ #ok, so if the datastream isn't attached via Biblio, and it isn't a DC or Bibtext datastream, it doesn't need to be here.
+                        $this->inactivateDatastream($ds_array[$i]);
+                        $ds_array[$i]=null; #remove this element from the array now that we've processed it.
+                  }
+
+            }
+
+            #finally, datastreams that should be there (DC and Bibtex).  If these weren't updated in the last step, then we need to create them!
+            if(!$has_dsDC) {
+                  $this->addDCDatastream($this->PID, $this->biblio_record["nid"]);
+            }
+
+            if(!$has_dsBib) {
+                  $this->addExtDatastream($this->bibtex->name, 'text/plain', $this->bibtex->http_path);
+            }
+
+            return true;
+
+      }
+
+
+
+
+      public function getDatastreamsByPID($pid){
+
+            #get all datastreams for this object, put their IDs into an array
+            $params = array('pid' => $pid, 'asOfDateTime' => '', 'dsState' => 'A');
+            $get_PIDs = $this->soap_client_FCM->__soapCall('getDatastreams', array($params));
+
+            $ds_array;
+
+            $ds_count = count($get_PIDs->datastream);
+
+            if($ds_count==1){ #here because PHP won't treat object as an array unless there is more than one set of data.
+                  $ds_array[0] = $get_PIDs->datastream->ID;
+            }
+            else {
+                  for($i = 0; $i<$ds_count; $i++){
+                        $ds_array[$i] = $get_PIDs->datastream[$i]->ID;
+                  }
+            }
+
+            return $ds_array;
+
+      }
+
+
+
+
+      #add X datasttream, which means inline Xml.  This XML is derived from the biblio record, which should already be instantiated
+      private function addDCDatastream(){
+
+            $params = array(
+                  'pid' => $this->PID,
+                  'dsID' => 'dc_' . $this->biblio_record["nid"],
+                  'altIDs' => null,
+                  'dsLabel' => 'Dublin Core',
+                  'versionable' => true,
+                  'MIMEType' => 'text/xml',
+                  'formatURI' => null,
+                  'dsLocation' => FILE_HTTP_PATH.'dummy.xml',
+                  'controlGroup' => 'X',
+                  'dsState' => 'A',
+                  'checksumType' => 'DISABLED',
+                  'checksum' => 'none',
+                  'logMessage' => 'b2f'
+            );
+
+            try{
+                  $send = $this->soap_client_FCM->__soapCall('addDatastream', array($params));
+            } catch (Exception $e) {
+                  $this->errors.='Error while adding a DC datastream for '.$this->PID.'.  ';
+            }
+
+            #it seems that the fedora API doesn't allow you to create a datastream and add XML to it at the same time, I guess I'll have to make an update to get the XML in there.  LAME!
+            return $this->updateDCDatastream();
+
+      }
+
+
+
+
+      #update X datasttream, which means inline Xml.  This XML is derived from the biblio record, which should already be instantiated
+      private function updateDCDatastream(){
+
+            $content = $this->buildDCXML();
+
+            $params = array(
+                  'pid' => $this->PID,
+                  'dsID' => 'dc_' . $this->biblio_record["nid"],
+                  'altIDs' => null,
+                  'dsLabel' => 'Dublin Core',
+                  'MIMEType' => 'text/xml',
+                  'formatURI' => null,
+                  'dsContent' => $content,
+                  'checksumType' => 'DISABLED',
+                  'checksum' => 'none',
+                  'logMessage' => 'b2f',
+                  'force' => false
+            );
+
+            try {
+                  $send = $this->soap_client_FCM->__soapCall('modifyDatastreamByValue', array($params));
+            } catch (Exception $e) {
+                  $this->errors.='Error while updating a DC datastream for '.$this->PID.'.  ';
+            }
+
+            if($send)
+                  return true;
+            else
+                  return false;
+
+      }
+
+
+
+
+      #add E datastream, meaning an externally referenced datastream.  We need the ID and a row from the attachments recordset in Biblio.  Row consists of filename, filemime, fid, version_id
+      private function addExtDatastream($dsID, $mime, $url){
+
+            $params = array(
+                  'pid' => $this->PID,
+                  'dsID' => $dsID,
+                  'altIDs' => null,
+                  'dsLabel' => 'Datastream',
+                  'versionable' => true,
+                  'MIMEType' => $mime,
+                  'formatURI' => null,
+                  'dsLocation' => $url,
+                  'controlGroup' => 'E',
+                  'dsState' => 'A',
+                  'checksumType' => 'DISABLED',
+                  'checksum' => 'none',
+                  'logMessage' => 'b2f'
+            );
+
+            try {
+                  $send = $this->soap_client_FCM->__soapCall('addDatastream', array($params));
+            } catch (Exception $e) {
+                  $this->errors.='Error while adding an external datastream for '.$this->PID.'.  ';
+            }
+
+            if($send)
+                  return true;
+            else
+                  return false;
+
+      }
+
+
+
+
+      #update E datastream, meaning an externally referenced datastream.  We need the ID and a row from the attachments recordset in Biblio.  Row consists of filename, filemime, fid, version_id
+      private function updateExtDatastream($dsID, $mime, $url){
+
+            #update object
+            $params = array('pid' => $this->PID,
+                  'dsID' => $dsID,
+                  'altIDs' => null,
+                  'dsLabel' => 'Datastream',
+                  'MIMEType' => $mime,
+                  'formatURI' => null,
+                  'dsLocation' => $url,
+                  'checksumType' => 'DISABLED',
+                  'checksum' => 'none',
+                  'logMessage' => 'b2f',
+                  'force' => false
+            );
+
+            try{
+                  $send = $this->soap_client_FCM->__soapCall('modifyDatastreamByReference', array($params));
+            } catch (Exception $e) {
+                  $this->errors.='Error while updating an external datastream for '.$this->PID.'.  ';
+            }
+
+            if($send)
+                  return true;
+            else
+                  return false;
+
+      }
+
+
+
+
+      #deactivates a datastream
+      private function inactivateDatastream($ds_id){
+
+            #update datastream, set to inactive
+            $params = array(
+                  'pid' => $this->PID,
+                  'dsID' => $ds_id,
+                  'dsState' => 'I',
+                  'logMessage' => 'b2f'
+            );
+
+            try {
+                  $send = $this->soap_client_FCM->__soapCall('setDatastreamState', array($params));
+            } catch (Exception $e) {
+                  $this->errors.='Error while inactivating a datastream for '.$this->PID.'.  ';
+            }
+
+            if($send)
+                  return true;
+            else
+                  return false;
+
+      }
+
+
+
+
+}
+
+?>
